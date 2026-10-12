@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+build/
+dist/
+models/
+models-quality/
+sessions/
+output/
+tmp/
+*.log
+settings.json
+.env
+.env.*
