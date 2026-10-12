@@ -11,6 +11,9 @@ import numpy as np
 from .audio import AudioChunk, RATE
 from .privacy import configure_onnx_privacy
 from .session import Session, Segment
+from .profiles import PROFILES
+from .recognition_guard import has_repetition_loop, REVIEW_TEXT, REVIEW_STATUS
+from . import runtime_log as monitor
 
 
 def local_path(value: str | Path) -> Path:
@@ -33,13 +36,18 @@ class ModelPaths:
     embedding: Path
 
     @classmethod
-    def resolve(cls, root: Path):
+    def resolve(cls, root: Path, model_size: str | None = None):
         root = local_path(root)
         manifest_path = root / "manifest.json"
         if not manifest_path.is_file():
             raise FileNotFoundError("로컬 모델이 없습니다. 먼저 모델 준비 도구를 실행하거나 준비된 models 폴더를 선택해 주세요.")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        whisper = local_path(root / manifest["whisper"])
+        selected = manifest["whisper"]
+        if model_size:
+            if model_size not in {"base", "small"}:
+                raise ValueError("지원하지 않는 음성 인식 모델입니다.")
+            selected = manifest.get("whisper_models", {}).get(model_size, f"whisper-{model_size}")
+        whisper = local_path(root / selected)
         if not whisper.is_relative_to(root):
             raise ValueError("모델 경로가 models 폴더 밖에 있습니다.")
         embedding = local_path(root / manifest.get("embedding", "speaker/embedding.onnx"))
@@ -88,7 +96,8 @@ class SpeakerRegistry:
 
 
 class LocalModels:
-    def __init__(self, paths: ModelPaths, notify=lambda _: None, threads=4):
+    def __init__(self, paths: ModelPaths, notify=lambda _: None, threads=4, profile="accurate"):
+        self.profile = PROFILES[profile]
         configure_onnx_privacy()
         notify("음성 인식 모델을 불러오는 중")
         from faster_whisper import WhisperModel
@@ -111,9 +120,58 @@ class LocalModels:
         notify("로컬 모델 준비 완료")
 
     def transcribe(self, chunk: AudioChunk, language="ko") -> list[dict]:
+        rows = self._decode(chunk, language)
+        suspicious = [has_repetition_loop("".join(w["text"] for w in row["words"])) for row in rows]
+        if not any(suspicious) and has_repetition_loop(" ".join(
+            "".join(w["text"] for w in row["words"]) for row in rows)):
+            suspicious = [True] * len(rows)
+        if not any(suspicious):
+            return rows
+        monitor.event("recognition_retry", source=chunk.source, count=sum(suspicious))
+        # Only one extra decoding pass per chunk; never log candidate text.
+        try:
+            retry_rows = self._decode(chunk, language, retry=True)
+            if has_repetition_loop(" ".join("".join(w["text"] for w in row["words"]) for row in retry_rows)):
+                retry_rows = []
+        except Exception as exc:
+            monitor.failure("transcribe", exc)
+            retry_rows = []
+        output = []
+        rejected = 0
+        for row, suspect in zip(rows, suspicious):
+            if not suspect:
+                output.append(row)
+                continue
+            start, end = row["start"], row["end"]
+            candidates = [candidate for candidate in retry_rows
+                if candidate["avg_logprob"] >= -1.0 and candidate["no_speech_prob"] < .6]
+            words = [w for candidate in candidates for w in candidate["words"]
+                if start <= (w["start"] + w["end"]) / 2 < end]
+            text = "".join(w["text"] for w in words).strip()
+            if text and not has_repetition_loop(text):
+                output.append({**row, "words": words, "reprocessed": True})
+            else:
+                rejected += 1
+                output.append({**row, "review_required": True,
+                    "words": [{"start": start, "end": end, "text": REVIEW_TEXT}]})
+        if rejected:
+            monitor.event("recognition_rejected", source=chunk.source, count=rejected)
+        merged = []
+        for row in output:
+            if (row.get("review_required") and merged and merged[-1].get("review_required")
+                    and row["start"] <= merged[-1]["end"] + .5):
+                merged[-1]["end"] = max(merged[-1]["end"], row["end"])
+                merged[-1]["words"][0]["end"] = merged[-1]["end"]
+            else:
+                merged.append(row)
+        return merged
+
+    def _decode(self, chunk: AudioChunk, language: str, retry=False) -> list[dict]:
         result, _ = self.asr.transcribe(chunk.samples, language=language or None,
-            beam_size=1, best_of=1, word_timestamps=True, condition_on_previous_text=False,
-            temperature=0.0,
+            beam_size=self.profile.beam_size, best_of=1, word_timestamps=True, condition_on_previous_text=False,
+            temperature=.2 if retry else 0.0,
+            repetition_penalty=1.1 if retry else 1.0,
+            no_repeat_ngram_size=4 if retry else 0,
             vad_filter=True, vad_parameters={"min_silence_duration_ms": 300},
             no_speech_threshold=.6, compression_ratio_threshold=2.4)
         rows = []
@@ -124,7 +182,12 @@ class LocalModels:
                 words = [{"start": chunk.start + segment.start, "end": chunk.start + segment.end, "text": segment.text}]
             if not words or not "".join(w["text"] for w in words).strip():
                 continue
-            rows.append({"id": uuid.uuid4().hex, "words": words})
+            start = max(chunk.start, chunk.commit_from, chunk.start + segment.start)
+            end = min(chunk.end, chunk.start + segment.end)
+            if end <= start:
+                start, end = max(chunk.start, chunk.commit_from), chunk.end
+            rows.append({"id": uuid.uuid4().hex, "words": words, "start": start, "end": end,
+                "avg_logprob": segment.avg_logprob, "no_speech_prob": segment.no_speech_prob})
         return rows
 
     def diarize(self, chunk: AudioChunk, registry: SpeakerRegistry) -> list[dict]:
@@ -156,12 +219,16 @@ class LocalModels:
 
 def initial_segments(rows: list[dict], source: str) -> list[Segment]:
     return [Segment(r["id"], r["words"][0]["start"], r["words"][-1]["end"], source,
-        "".join(w["text"] for w in r["words"]).strip()) for r in rows]
+        "".join(w["text"] for w in r["words"]).strip(), status=REVIEW_STATUS if r.get("review_required")
+            else ("재인식 · 발화자 확인 중" if r.get("reprocessed") else "발화자 확인 중")) for r in rows]
 
 
 def attributed_segments(rows: list[dict], turns: list[dict], source: str) -> list[Segment]:
     output = []
     for row in rows:
+        if row.get("review_required"):
+            output.extend(initial_segments([row], source))
+            continue
         groups = []
         for word in row["words"]:
             mid = (word["start"] + word["end"]) / 2
@@ -180,6 +247,8 @@ def attributed_segments(rows: list[dict], turns: list[dict], source: str) -> lis
                 groups.append((key, [word]))
         for i, ((sid, overlap), words) in enumerate(groups):
             status = "겹친 발언" if overlap else ("분류됨" if sid else "발화자 미확정")
+            if row.get("reprocessed"):
+                status = "재인식 · " + status
             output.append(Segment(f"{row['id']}_{i}", words[0]["start"], words[-1]["end"], source,
                 "".join(w["text"] for w in words).strip(), sid, status, overlap))
     return output

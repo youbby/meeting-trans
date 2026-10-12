@@ -146,4 +146,6 @@ def export_session(snapshot: dict, folder: Path) -> tuple[Path, Path | None, str
         markdown_to_pdf(md_path, pdf_path)
         return md_path, pdf_path, None
     except Exception as exc:
+        from .runtime_log import failure
+        failure("export", exc)
         return md_path, None, str(exc)

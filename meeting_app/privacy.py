@@ -22,6 +22,8 @@ def install_offline_guard():
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
     def deny(*args, **kwargs):
+        from .runtime_log import event
+        event("network_blocked")
         blocked_attempts.append("network API blocked")
         raise PermissionError("이 프로그램은 외부 통신을 허용하지 않습니다. 모델은 별도 준비 도구로 설치해 주세요.")
 

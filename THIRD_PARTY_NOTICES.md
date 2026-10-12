@@ -5,7 +5,7 @@ The application processes audio locally. Model files are obtained by the separat
 | Component | License / source |
 | --- | --- |
 | faster-whisper | MIT - https://github.com/SYSTRAN/faster-whisper |
-| Whisper model, converted by SYSTRAN (base default; small optional) | MIT - https://huggingface.co/Systran/faster-whisper-base |
+| Whisper models, converted by SYSTRAN (small default; base speed mode) | MIT - https://huggingface.co/Systran/faster-whisper-small and https://huggingface.co/Systran/faster-whisper-base |
 | CTranslate2 | MIT - https://github.com/OpenNMT/CTranslate2 |
 | sherpa-onnx | Apache-2.0 - https://github.com/k2-fsa/sherpa-onnx |
 | pyannote segmentation 3.0 (ONNX conversion) | MIT - https://huggingface.co/pyannote/segmentation-3.0 |

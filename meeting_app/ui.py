@@ -16,6 +16,8 @@ from .export import export_session
 from .models import ModelPaths, local_path
 from .paths import data_root, default_models
 from .session import Session, Segment, SOURCES, atomic_text, timestamp
+from . import runtime_log as monitor
+from .profiles import PROFILES
 
 
 class App(tk.Tk):
@@ -50,6 +52,8 @@ class App(tk.Tk):
         self.aec_on, self.audio_on = tk.BooleanVar(value=True), tk.BooleanVar(value=False)
         self.auto_scroll = tk.BooleanVar(value=True)
         self.language = tk.StringVar(value="한국어")
+        saved_profile = self.settings.get("recognition_profile", "accurate")
+        self.recognition = tk.StringVar(value=PROFILES.get(saved_profile, PROFILES["accurate"]).label)
         self.delay_ms = tk.IntVar(value=int(self.settings.get("echo_delay", 60)))
         self.threshold = tk.DoubleVar(value=float(self.settings.get("speaker_threshold", .62)))
         self.status = tk.StringVar(value="시작을 누르면 선택한 입력의 기록을 시작합니다.")
@@ -63,6 +67,20 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.close_app)
         self.after(100, self.poll)
         self.after(2000, self.autosave)
+        monitor.event("ui_ready")
+        self.after(10000, self.monitor_status)
+
+    def report_callback_exception(self, exc_type, exc_value, traceback):
+        monitor.failure("ui_callback", exc_value)
+        if hasattr(self, "status"):
+            self.status.set("화면 처리 중 오류가 발생했습니다. 실행 로그의 오류 분류를 확인해 주세요.")
+
+    def monitor_status(self):
+        monitor.event("heartbeat", recording=self._running(), paused=self.paused,
+            queue_depth=self.engine.chunks.qsize() if self.engine else 0)
+        if not monitor.healthy():
+            self.status.set("실행 로그를 저장하지 못했습니다. 디스크 여유 공간과 로그 폴더 권한을 확인해 주세요.")
+        self.after(10000, self.monitor_status)
 
     def _style(self):
         self.option_add("*Font", ("맑은 고딕", 10))
@@ -126,6 +144,9 @@ class App(tk.Tk):
         self.audio_check.pack(side="left", padx=16)
         self.lang_combo = ttk.Combobox(option_row, values=["한국어", "자동 감지", "영어"], textvariable=self.language, state="readonly", width=10)
         self.lang_combo.pack(side="left")
+        self.profile_combo = ttk.Combobox(option_row, values=[p.label for p in PROFILES.values()],
+            textvariable=self.recognition, state="readonly", width=12)
+        self.profile_combo.pack(side="left", padx=(10, 0))
         self.refresh_button = ttk.Button(option_row, text="장치 새로고침", command=self.refresh_devices)
         self.refresh_button.pack(side="right")
         ttk.Label(main, textvariable=self.capture_status, style="Muted.TLabel").pack(anchor="w", pady=(8, 8))
@@ -162,6 +183,7 @@ class App(tk.Tk):
         self.transcript.bind("<<TreeviewSelect>>", lambda event: self.show_detail())
         self.transcript.tag_configure("pending", foreground="#8993a1")
         self.transcript.tag_configure("system", background="#f4f9ff")
+        self.transcript.tag_configure("review", background="#fff0d8", foreground="#855100")
         ttk.Label(speaker_frame, text="발화자", font=("맑은 고딕", 12, "bold")).pack(anchor="w", pady=(0, 7), padx=8)
         speaker_tools = ttk.Frame(speaker_frame)
         speaker_tools.pack(side="bottom", fill="x")
@@ -181,6 +203,7 @@ class App(tk.Tk):
         ttk.Button(bottom, text="저장 폴더", command=self.open_folder).pack(side="left", padx=6)
         self.settings_button = ttk.Button(bottom, text="설정 / 모델 경로", command=self.show_settings)
         self.settings_button.pack(side="left")
+        ttk.Button(bottom, text="실행 로그", command=self.open_logs).pack(side="left", padx=6)
         ttk.Label(bottom, textvariable=self.lag, style="Muted.TLabel").pack(side="right")
         ttk.Label(footer, textvariable=self.status, wraplength=1120).pack(anchor="w", pady=(10, 0))
         ttk.Label(footer, text="발화자 분류는 수정할 수 있습니다. 회의 앱 음소거와 이 프로그램의 마이크 수집은 별개입니다.", style="Muted.TLabel").pack(anchor="w", pady=(4, 0))
@@ -200,6 +223,7 @@ class App(tk.Tk):
                     combo.set("사용 가능한 WASAPI 장치 없음")
         except Exception as exc:
             self.mics, self.outputs = [], []
+            monitor.failure("devices", exc)
             self.status.set(f"장치 확인 실패: {exc}")
 
     def _running(self):
@@ -212,7 +236,8 @@ class App(tk.Tk):
             if not (self.mic_on.get() or self.system_on.get()):
                 raise ValueError("마이크 또는 PC 출력 중 하나 이상을 선택해 주세요.")
             model_root = local_path(self.model_path.get())
-            ModelPaths.resolve(model_root)
+            profile = next(key for key, value in PROFILES.items() if value.label == self.recognition.get())
+            ModelPaths.resolve(model_root, PROFILES[profile].model_size)
             mic = self.mics[self.mic_combo.current()] if self.mics and self.mic_combo.current() >= 0 else None
             output = self.outputs[self.output_combo.current()] if self.outputs and self.output_combo.current() >= 0 else None
             if self.mic_on.get() and mic is None:
@@ -225,7 +250,7 @@ class App(tk.Tk):
             self.session, self.session_path = session, folder / "session.json"
             config = EngineConfig(model_root, folder, mic, output, self.mic_on.get(), self.system_on.get(),
                 self.aec_on.get(), self.audio_on.get(), {"한국어": "ko", "영어": "en", "자동 감지": ""}[self.language.get()],
-                echo_delay_ms=self.delay_ms.get(), speaker_threshold=self.threshold.get())
+                echo_delay_ms=self.delay_ms.get(), speaker_threshold=self.threshold.get(), profile=profile)
             self.engine = Engine(session, config, self.emit)
             self.paused = False
             self._last_revision = -1
@@ -234,12 +259,13 @@ class App(tk.Tk):
             self.save_settings()
             self.engine.start()
         except Exception as exc:
+            monitor.failure("session_start", exc)
             messagebox.showerror("시작할 수 없습니다", str(exc), parent=self)
 
     def set_busy(self, busy):
         for widget in (self.start_button, self.open_button, self.refresh_button, self.settings_button, self.title_entry, self.aec_check, self.audio_check):
             widget.configure(state="disabled" if busy else "normal")
-        for combo in (self.mic_combo, self.output_combo, self.lang_combo):
+        for combo in (self.mic_combo, self.output_combo, self.lang_combo, self.profile_combo):
             combo.configure(state="disabled" if busy else "readonly")
         self.pause_button.configure(state="normal" if busy else "disabled")
         self.stop_button.configure(state="normal" if busy else "disabled")
@@ -276,7 +302,7 @@ class App(tk.Tk):
             names[speaker["id"]] = speaker["name"]
             self.speaker_tree.insert("", "end", iid=speaker["id"], values=(speaker["name"], f"{SOURCES[speaker['source']]} ({speaker['source']})"))
         for segment in data["segments"]:
-            tag = "pending" if not segment["speaker_id"] else ("system" if segment["source"] == "SYSTEM" else "mic")
+            tag = "review" if segment["status"] == "인식 확인 필요" else ("pending" if not segment["speaker_id"] else ("system" if segment["source"] == "SYSTEM" else "mic"))
             self.transcript.insert("", "end", iid=segment["id"], values=(timestamp(segment["start"]), SOURCES[segment["source"]],
                 names.get(segment["speaker_id"], "확인 중"), segment["text"], segment["status"]), tags=(tag,))
         if selected and self.transcript.exists(selected[0]):
@@ -354,20 +380,24 @@ class App(tk.Tk):
             folder.mkdir(parents=True, exist_ok=True)
             self.session_path = folder / "session.json"
         except Exception as exc:
+            monitor.failure("export_path", exc)
             messagebox.showerror("저장 경로 오류", str(exc), parent=self)
             return
         self.exporting = True
         self.save_button.configure(state="disabled")
         self.open_button.configure(state="disabled")
         self.status.set("Markdown 저장 및 PDF 생성 중…")
+        monitor.event("export_started")
         session, session_path = self.session, self.session_path
 
         def worker():
             try:
                 session.save(session_path)
                 result = export_session(snapshot, folder)
+                monitor.event("export_completed", md=bool(result[0]), pdf=bool(result[1]))
                 self.emit("export", (result, snapshot["revision"]))
             except Exception as exc:
+                monitor.failure("export", exc)
                 self.emit("export_error", str(exc))
         threading.Thread(target=worker, name="document-export", daemon=False).start()
 
@@ -380,12 +410,23 @@ class App(tk.Tk):
         try:
             self.session_path = local_path(path)
             self.session = Session.load(self.session_path)
+            monitor.event("session_opened")
             self.meeting_title.set(self.session.title)
             self._last_revision = -1
             self.refresh_session()
             self.status.set("세션을 열었습니다. 이름과 발언을 수정하고 문서를 다시 저장할 수 있습니다.")
         except Exception as exc:
+            monitor.failure("session_open", exc)
             messagebox.showerror("세션 열기 실패", str(exc), parent=self)
+
+    def open_logs(self):
+        try:
+            folder = data_root() / "logs"
+            folder.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(folder))
+        except Exception as exc:
+            monitor.failure("folder_open", exc)
+            messagebox.showerror("로그 폴더 열기 실패", "로그 폴더를 열 수 없습니다.", parent=self)
 
     def open_folder(self):
         try:
@@ -435,7 +476,8 @@ class App(tk.Tk):
     def save_settings(self):
         settings = {"models": self.model_path.get(), "output": self.output_path.get(),
             "microphone": self.mic_combo.get(), "output_device": self.output_combo.get(),
-            "echo_delay": self.delay_ms.get(), "speaker_threshold": self.threshold.get()}
+            "echo_delay": self.delay_ms.get(), "speaker_threshold": self.threshold.get(),
+            "recognition_profile": next(key for key, p in PROFILES.items() if p.label == self.recognition.get())}
         atomic_text(self.settings_path, json.dumps(settings, ensure_ascii=False, indent=2))
 
     def autosave(self):
@@ -444,6 +486,7 @@ class App(tk.Tk):
                 self.session.save(self.session_path)
                 self._saved_revision = self.session.revision
             except Exception as exc:
+                monitor.failure("session_save", exc)
                 self.status.set(f"자동 저장 실패: {exc}")
         self.after(2000, self.autosave)
 

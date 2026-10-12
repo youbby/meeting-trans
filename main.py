@@ -9,6 +9,8 @@ from pathlib import Path
 
 def main():
     multiprocessing.freeze_support()
+    from meeting_app import runtime_log
+    runtime_log.start()
     from meeting_app.privacy import install_offline_guard
     install_offline_guard()
     parser = argparse.ArgumentParser(description="Standalone Meeting Transcriber")
@@ -43,16 +45,15 @@ def main():
 
 
 if __name__ == "__main__":
-    import sys
+    from meeting_app import runtime_log
     try:
         main()
-    except Exception:
-        import traceback
-        from meeting_app.paths import data_root
-        error_path = data_root() / "startup-error.log"
-        error_path.write_text(traceback.format_exc(), encoding="utf-8")
+    except Exception as exc:
+        runtime_log.failure("startup", exc)
+        error_path = runtime_log.path()
+        runtime_log.finish("error")
         if sys.stderr:
-            traceback.print_exc()
+            print("Application failed. See the operational log for an error category.", file=sys.stderr)
         elif "--self-check" not in sys.argv:
             import ctypes
             ctypes.windll.user32.MessageBoxW(None, f"프로그램을 실행할 수 없습니다. 오류 기록: {error_path}", "로컬 회의 기록", 16)

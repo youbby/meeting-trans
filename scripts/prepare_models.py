@@ -11,6 +11,10 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 HEADERS = {"User-Agent": "StandaloneMeetingTranscriber-Setup/0.1"}
+WHISPER_REVISIONS = {
+    "base": "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66",
+    "small": "536b0662742c02347bc0e980a01041f333bce120",
+}
 
 
 def request(url: str):
@@ -34,18 +38,17 @@ def fetch(url: str, path: Path) -> dict:
 def main():
     parser = argparse.ArgumentParser(description="Download local models before running the offline app")
     parser.add_argument("--destination", type=Path, default=ROOT / "models")
-    parser.add_argument("--whisper", choices=["base", "small"], default="base")
+    parser.add_argument("--whisper", choices=["base", "small", "both"], default="both")
     args = parser.parse_args()
     base = args.destination.resolve()
     records = {}
-    repo = f"Systran/faster-whisper-{args.whisper}"
-    with request(f"https://huggingface.co/api/models/{repo}") as response:
-        metadata = json.load(response)
-    revision = metadata["sha"]
-    available = {item["rfilename"] for item in metadata["siblings"]}
-    for name in ["config.json", "model.bin", "tokenizer.json", "vocabulary.json", "vocabulary.txt", "preprocessor_config.json"]:
-        if name in available:
-            relative = f"whisper-{args.whisper}/{name}"
+    sizes = ["base", "small"] if args.whisper == "both" else [args.whisper]
+    selected = "small" if "small" in sizes else "base"
+    for size in sizes:
+        repo = f"Systran/faster-whisper-{size}"
+        revision = WHISPER_REVISIONS[size]
+        for name in ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"]:
+            relative = f"whisper-{size}/{name}"
             records[relative] = fetch(f"https://huggingface.co/{repo}/resolve/{revision}/{name}", base / relative)
     assets = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
     relative = "speaker/embedding-3dspeaker.onnx"
@@ -67,7 +70,9 @@ def main():
     font_root = ROOT / "assets/fonts"
     for name in ["NanumGothic-Regular.ttf", "NanumGothic-Bold.ttf", "OFL.txt"]:
         fetch(f"https://raw.githubusercontent.com/google/fonts/main/ofl/nanumgothic/{name}", font_root / name)
-    manifest = {"whisper": f"whisper-{args.whisper}", "embedding": "speaker/embedding-3dspeaker.onnx", "revision": revision, "files": records}
+    manifest = {"whisper": f"whisper-{selected}", "whisper_models": {s: f"whisper-{s}" for s in sizes},
+        "embedding": "speaker/embedding-3dspeaker.onnx", "revision": WHISPER_REVISIONS[selected],
+        "revisions": {s: WHISPER_REVISIONS[s] for s in sizes}, "files": records}
     (base / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Ready: {base}", flush=True)
     print("The meeting application runs offline; this setup utility is the only downloader.", flush=True)

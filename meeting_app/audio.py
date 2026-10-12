@@ -217,15 +217,19 @@ class AudioChunk:
 
 
 class UtteranceBuffer:
-    def __init__(self, source: str, max_seconds=6.0):
+    def __init__(self, source: str, max_seconds=6.0, silence_seconds=.55, minimum_seconds=0.0):
         from pywebrtc_audio import VoiceDetector
         self.source = source
         self.vad = VoiceDetector(sample_rate=RATE)
-        self.pre: deque[Frame] = deque(maxlen=20)
+        # VAD often recognizes speech after its first quiet syllable. Keep enough
+        # lead-in audio to restore that onset instead of making ASR guess it.
+        self.pre: deque[Frame] = deque(maxlen=80)
         self.active: list[Frame] = []
         self.silence = 0
         self.voiced = 0
         self.max_frames = int(max_seconds * 100)
+        self.silence_frames = round(silence_seconds * 100)
+        self.minimum_frames = round(minimum_seconds * 100)
         self.committed = 0.0
 
     def feed(self, frame: Frame) -> AudioChunk | None:
@@ -242,8 +246,8 @@ class UtteranceBuffer:
         self.active.append(frame)
         self.voiced += int(voiced)
         self.silence = 0 if voiced else self.silence + 1
-        if self.silence >= 55 or len(self.active) >= self.max_frames:
-            return self.flush(keep_overlap=self.silence < 55)
+        if (self.silence >= self.silence_frames and len(self.active) >= self.minimum_frames) or len(self.active) >= self.max_frames:
+            return self.flush(keep_overlap=self.silence < self.silence_frames)
         return None
 
     def flush(self, keep_overlap=False) -> AudioChunk | None:

@@ -13,6 +13,8 @@ import numpy as np
 from .audio import Capture, Device, EchoCleaner, ReferenceBuffer, UtteranceBuffer, Frame, RATE
 from .models import LocalModels, ModelPaths, SpeakerRegistry, initial_segments, attributed_segments
 from .session import Session
+from . import runtime_log as monitor
+from .profiles import PROFILES
 
 
 @dataclass
@@ -26,9 +28,10 @@ class EngineConfig:
     aec_enabled: bool = True
     save_audio: bool = False
     language: str = "ko"
-    chunk_seconds: float = 6.0
+    chunk_seconds: float | None = None
     echo_delay_ms: int = 60
     speaker_threshold: float = .62
+    profile: str = "accurate"
 
 
 class AudioArchive:
@@ -73,12 +76,20 @@ class Engine:
         self.chunks: queue.Queue = queue.Queue(maxsize=120)
         self.epoch = time.monotonic()
         self.thread = None
+        self.profile = PROFILES[config.profile]
+
+    def _utterance_buffer(self, source):
+        return UtteranceBuffer(source, self.config.chunk_seconds or self.profile.chunk_seconds,
+            self.profile.silence_seconds, self.profile.minimum_seconds)
 
     def start(self):
+        monitor.event("session_started", mic=self.config.mic_enabled, system=self.config.system_enabled,
+            reference=self.config.aec_enabled, audio_saved=self.config.save_audio, profile=self.config.profile)
         self.thread = threading.Thread(target=self._run, name="local-inference", daemon=False)
         self.thread.start()
 
     def stop(self):
+        monitor.event("stop_requested")
         self.stopping.set()
 
     def set_modes(self, mic: bool, system: bool, paused: bool):
@@ -100,6 +111,7 @@ class Engine:
         try:
             self.chunks.put_nowait(chunk)
         except queue.Full:
+            monitor.event("capture_warning", reason="queue_full", source=chunk.source, queue_depth=self.chunks.qsize())
             self.log_event(f"{chunk.source}: 처리 대기 용량 초과, {chunk.start:.1f}~{chunk.end:.1f}초 전사 누락", chunk.source)
 
     def _capture(self):
@@ -134,14 +146,16 @@ class Engine:
                     reference = ReferenceBuffer()
                     pending.clear()
                     cleaner = EchoCleaner(self.config.echo_delay_ms) if mic and self.config.aec_enabled else None
-                    buffers = {s: UtteranceBuffer(s, self.config.chunk_seconds) for s in ("MIC", "SYSTEM")}
+                    buffers = {s: self._utterance_buffer(s) for s in ("MIC", "SYSTEM")}
                     self.log_event("수집 일시정지" if paused else f"수집 설정: 마이크 {'켜짐' if mic else '꺼짐'}, PC 출력 전사 {'켜짐' if system else '꺼짐'}")
                     self.emit("capture", {"mic": mic, "system": system, "reference": bool(cleaner)})
+                    monitor.event("capture_state", mic=mic, system=system, reference=bool(cleaner), paused=paused)
                 try:
                     frames, status = cap.read(.03)
                 except queue.Empty:
                     frames, status = [], 0
                 if status:
+                    monitor.event("capture_warning", reason="audio_status", status=status)
                     self.log_event(f"오디오 입력 상태 {status}: 일부 구간 손실 가능")
                 now = time.monotonic()
                 for frame in frames:
@@ -165,8 +179,9 @@ class Engine:
                     elif now - arrived > .35:
                         pending.popleft()
                         if now - last_reference_error > 2:
+                            monitor.event("capture_warning", reason="reference_missing", source="MIC")
                             self._enqueue(buffers["MIC"].flush())
-                            buffers["MIC"] = UtteranceBuffer("MIC", self.config.chunk_seconds)
+                            buffers["MIC"] = self._utterance_buffer("MIC")
                             self.log_event("마이크 처리 공백: 에코 참조 시간 불일치. 장치 선택을 확인해 주세요.", "MIC")
                             self.emit("aec", "출력 참조 확인 필요")
                             last_reference_error = now
@@ -179,6 +194,7 @@ class Engine:
                     if not cap.healthy():
                         raise RuntimeError("오디오 장치가 연결 해제되었습니다. 세션을 종료한 뒤 장치를 다시 선택해 주세요.")
                     if cap.drops > dropped:
+                        monitor.event("capture_warning", reason="capture_dropped", count=cap.drops - dropped)
                         self.log_event(f"오디오 수집 버퍼 초과: {cap.drops - dropped}블록 손실")
                         dropped = cap.drops
                     last_health = now
@@ -190,6 +206,7 @@ class Engine:
             for buffer in buffers.values():
                 self._enqueue(buffer.flush())
         except Exception as exc:
+            monitor.failure("capture", exc)
             for buffer in buffers.values():
                 self._enqueue(buffer.flush())
             self.log_event(f"수집 오류: {exc}")
@@ -205,7 +222,11 @@ class Engine:
     def _run(self):
         capture_thread = None
         try:
-            models = LocalModels(ModelPaths.resolve(self.config.model_root), lambda message: self.emit("status", message))
+            monitor.event("models_loading")
+            model_started = time.monotonic()
+            models = LocalModels(ModelPaths.resolve(self.config.model_root, self.profile.model_size),
+                lambda message: self.emit("status", message), profile=self.config.profile)
+            monitor.event("models_ready", elapsed_seconds=time.monotonic() - model_started)
             if self.stopping.is_set():
                 return
             registry = SpeakerRegistry(self.session, self.config.speaker_threshold)
@@ -220,23 +241,32 @@ class Engine:
                 delay = max(0, time.monotonic() - self.epoch - chunk.end)
                 self.emit("lag", {"seconds": delay, "queued": self.chunks.qsize()})
                 try:
+                    processing_started = time.monotonic()
                     rows = models.transcribe(chunk, self.config.language)
                     for segment in initial_segments(rows, chunk.source):
                         self.session.add_segment(segment)
                     self.emit("updated", None)
                     self.emit("lag", {"seconds": max(0, time.monotonic() - self.epoch - chunk.end),
                         "queued": self.chunks.qsize()})
-                    if rows:
+                    if any(not row.get("review_required") for row in rows):
                         try:
                             turns = models.diarize(chunk, registry)
                             self.session.replace_segments([r["id"] for r in rows], attributed_segments(rows, turns, chunk.source))
                         except Exception as exc:
+                            monitor.failure("diarize", exc)
                             self.log_event(f"발화자 분석 실패({chunk.source}): {exc}", chunk.source)
                     self.session.save(self.config.session_dir / "session.json")
                     self.emit("updated", None)
+                    monitor.event("chunk_processed", source=chunk.source,
+                        duration_seconds=chunk.end - chunk.start,
+                        elapsed_seconds=time.monotonic() - processing_started,
+                        queue_depth=self.chunks.qsize(), segments=len(rows),
+                        lag_seconds=max(0, time.monotonic() - self.epoch - chunk.end))
                 except Exception as exc:
+                    monitor.failure("transcribe", exc)
                     self.log_event(f"전사 실패({chunk.source}, {chunk.start:.1f}~{chunk.end:.1f}초): {exc}", chunk.source)
         except Exception as exc:
+            monitor.failure("models", exc)
             self.emit("error", str(exc))
         finally:
             self.stopping.set()
@@ -254,5 +284,7 @@ class Engine:
             try:
                 self.session.save(self.config.session_dir / "session.json")
             except Exception as exc:
+                monitor.failure("session_save", exc)
                 self.emit("error", f"세션 저장 실패: {exc}")
             self.emit("state", "stopped")
+            monitor.event("session_stopped")
