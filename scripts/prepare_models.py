@@ -9,6 +9,8 @@ from pathlib import Path
 import tarfile
 import urllib.request
 
+from quantize_models import quantize_int8
+
 ROOT = Path(__file__).resolve().parents[1]
 HEADERS = {"User-Agent": "StandaloneMeetingTranscriber-Setup/0.1"}
 WHISPER_REVISIONS = {
@@ -41,6 +43,8 @@ def main():
     parser.add_argument("--whisper", choices=["base", "small", "both"], default="both")
     args = parser.parse_args()
     base = args.destination.resolve()
+    previous = base / "manifest.json"
+    previous = json.loads(previous.read_text(encoding="utf-8")).get("files", {}) if previous.is_file() else {}
     records = {}
     sizes = ["base", "small"] if args.whisper == "both" else [args.whisper]
     selected = "small" if "small" in sizes else "base"
@@ -49,7 +53,12 @@ def main():
         revision = WHISPER_REVISIONS[size]
         for name in ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"]:
             relative = f"whisper-{size}/{name}"
-            records[relative] = fetch(f"https://huggingface.co/{repo}/resolve/{revision}/{name}", base / relative)
+            url = f"https://huggingface.co/{repo}/resolve/{revision}/{name}"
+            records[relative] = fetch(url, base / relative)
+            if name == "model.bin":
+                # The app always loads Whisper as int8; storing int8 halves the file with identical output.
+                source = quantize_int8(base / relative) or previous.get(relative, {}).get("source_sha256")
+                records[relative] = {**fetch(url, base / relative), "source_sha256": source, "stored_as": "int8"}
     assets = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
     relative = "speaker/embedding-3dspeaker.onnx"
     records[relative] = fetch(f"{assets}/speaker-recongition-models/3dspeaker_speech_eres2net_base_200k_sv_zh-cn_16k-common.onnx", base / relative)

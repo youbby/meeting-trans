@@ -4,7 +4,7 @@
 
 ## 옮길 파일과 실행
 
-1. `dist/MeetingTranscriber-v0.1.2-win-x64.zip`과 함께 있는 `.zip.sha256` 파일을 다른 PC로 복사합니다. USB·개인 저장 공간 등으로 전달하면 됩니다.
+1. `dist/MeetingTranscriber-v0.1.3-win-x64.zip`과 함께 있는 `.zip.sha256` 파일을 다른 PC로 복사합니다. USB·개인 저장 공간 등으로 전달하면 됩니다.
 2. ZIP을 **폴더 전체로 압축 해제**합니다. ZIP 내부에서 EXE를 바로 실행하지 않습니다.
 3. 압축 해제된 `MeetingTranscriber/MeetingTranscriber.exe`를 실행합니다.
 4. 해당 PC의 마이크·PC 출력 장치를 선택하고 기록을 시작합니다. 장치 이름은 PC마다 다릅니다.
@@ -18,7 +18,7 @@
 압축 파일과 체크섬을 같은 폴더에 둔 상태에서 PowerShell로 확인할 수 있습니다.
 
 ```powershell
-$zip = '.\MeetingTranscriber-v0.1.2-win-x64.zip'
+$zip = '.\MeetingTranscriber-v0.1.3-win-x64.zip'
 $expected = ((Get-Content -LiteralPath "$zip.sha256").Trim() -split '\s+')[0]
 (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -eq $expected
 ```

@@ -12,9 +12,14 @@ for package in ['faster_whisper', 'sherpa_onnx', 'pywebrtc_audio', 'soxr', 'pyau
     binaries += b
     hiddenimports += h
 datas += collect_data_files('reportlab')
+# C/C++ headers and import libraries are only for building against sherpa-onnx.
+datas = [d for d in datas if not d[0].endswith(('.h', '.lib'))]
+binaries = [b for b in binaries if not b[0].endswith('.lib')]
 a = Analysis([str(root / 'main.py')], pathex=[str(root)], binaries=binaries, datas=datas,
     hiddenimports=hiddenimports, hookspath=[], runtime_hooks=[],
-    excludes=['pytest', 'pypdfium2', 'torch', 'tensorflow', 'matplotlib', 'IPython'], noarchive=False)
+    excludes=['pytest', 'pypdfium2', 'torch', 'tensorflow', 'matplotlib', 'IPython',
+        # Offline app: no Hub transfers (hf_xet). reportlab needs PIL, but never the AVIF codec.
+        'hf_xet', 'PIL.AvifImagePlugin', 'PIL._avif'], noarchive=False)
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='MeetingTranscriber',
     debug=False, bootloader_ignore_signals=False, strip=False, upx=False, console=False)

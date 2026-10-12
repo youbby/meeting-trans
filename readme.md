@@ -2,7 +2,7 @@
 
 Windows PC에서 마이크와 PC 출력의 음성을 텍스트로 변환하고, 발화자와 입력 출처를 표시하는 데스크톱 프로그램입니다. 음성 인식·발화자 분석·에코 제거·문서 생성은 로컬에서 실행합니다.
 
-버전: 0.1.2 / 수정일: 2026-10-12
+버전: 0.1.3 / 수정일: 2026-10-13
 
 ## 현재 상태
 
@@ -20,9 +20,9 @@ Windows PC에서 마이크와 PC 출력의 음성을 텍스트로 변환하고, 
 
 | 파일 | 용도 |
 | --- | --- |
-| `dist/MeetingTranscriber-v0.1.2-win-x64.zip` | 개인 PC 간 이동용 패키지, 약 715 MiB |
-| `dist/MeetingTranscriber-v0.1.2-win-x64.zip.sha256` | ZIP 복사·다운로드 중 손상 확인용 체크섬 |
-| `dist/MeetingTranscriber/` | 압축 전 실행 폴더, 압축 해제 크기 약 969 MiB |
+| `dist/MeetingTranscriber-v0.1.3-win-x64.zip` | 개인 PC 간 이동용 패키지, 약 419 MiB |
+| `dist/MeetingTranscriber-v0.1.3-win-x64.zip.sha256` | ZIP 복사·다운로드 중 손상 확인용 체크섬 |
+| `dist/MeetingTranscriber/` | 압축 전 실행 폴더, 압축 해제 크기 약 659 MiB |
 
 압축을 풀면 아래 구조가 유지되어야 합니다.
 
@@ -256,7 +256,7 @@ Python 3.12 x64를 권장합니다. `uv` 또는 Python launcher와 Python 3.12�
 
 이 명령은 현재 실행 폴더를 검사한 뒤 `PACKAGE_FILES.json`, 버전별 ZIP과 `.zip.sha256`을 다시 생성합니다. README 등 배포 문서를 수정했다면 먼저 같은 파일을 실행 폴더에 복사합니다.
 
-`models/manifest.json`은 사용 모델의 파일 크기·SHA-256·출처를 보존합니다. 실행 시 주요 파일의 존재와 크기를 검사하며, SHA-256은 준비·배포 점검용입니다. 앱의 실행 중 자동 모델 갱신은 없습니다.
+`models/manifest.json`은 사용 모델의 파일 크기·SHA-256·출처를 보존합니다. 앱은 Whisper를 항상 CPU INT8로 실행하므로, 준비 도구는 내려받은 float16 `model.bin`을 실행 시와 같은 방식으로 미리 INT8 양자화해 저장합니다(`scripts/quantize_models.py`). 인식 결과는 원본과 동일하고 파일 크기는 절반 정도입니다. 원본 파일의 해시는 `source_sha256`에 기록합니다. 실행 시 주요 파일의 존재와 크기를 검사하며, SHA-256은 준비·배포 점검용입니다. 앱의 실행 중 자동 모델 갱신은 없습니다.
 
 | 구성 | 사용 기술 |
 | --- | --- |

@@ -68,7 +68,7 @@ SOURCES = {
 
 def fetch(item):
     name, url = item
-    request = urllib.request.Request(url, headers={"User-Agent": "MeetingTranscriber-NoticeSetup/0.1.2"})
+    request = urllib.request.Request(url, headers={"User-Agent": "MeetingTranscriber-NoticeSetup/0.1.3"})
     with urllib.request.urlopen(request, timeout=25) as response:
         content = response.read(2_000_000)
         final_url = response.url
