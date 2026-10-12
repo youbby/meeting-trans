@@ -16,5 +16,10 @@ Copy-Item -LiteralPath 'models/manifest.json' -Destination $modelRoot -Force
 Copy-Item -LiteralPath 'readme.md' -Destination $packageRoot -Force
 Copy-Item -LiteralPath 'THIRD_PARTY_NOTICES.md' -Destination $packageRoot -Force
 Copy-Item -LiteralPath 'scripts/enable_firewall.ps1' -Destination $packageRoot -Force
+Copy-Item -LiteralPath 'scripts/check_package.ps1' -Destination $packageRoot -Force
 if (Test-Path -LiteralPath 'docs') { Copy-Item -LiteralPath 'docs' -Destination $packageRoot -Recurse -Force }
+& '.\.venv\Scripts\python.exe' 'scripts/collect_notices.py' --package $packageRoot
+if ($LASTEXITCODE -ne 0) { throw 'Notice collection failed.' }
+& '.\.venv\Scripts\python.exe' 'scripts/package_portable.py' --package $packageRoot
+if ($LASTEXITCODE -ne 0) { throw 'Portable packaging failed.' }
 Write-Host "Built: $packageRoot"

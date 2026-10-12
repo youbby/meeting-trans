@@ -5,6 +5,8 @@ __pycache__/
 build/
 dist/
 models/
+!/licenses/upstream/models/
+!/licenses/upstream/models/**
 models-quality/
 sessions/
 output/

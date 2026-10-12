@@ -1,0 +1,2 @@
+# Preserve downloaded notice bytes so sources.json hashes survive any checkout.
+licenses/upstream/** -text
