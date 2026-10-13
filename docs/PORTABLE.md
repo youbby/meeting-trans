@@ -9,7 +9,7 @@
 3. 압축 해제된 `MeetingTranscriber/MeetingTranscriber.exe`를 실행합니다.
 4. 해당 PC의 마이크·PC 출력 장치를 선택하고 기록을 시작합니다. 장치 이름은 PC마다 다릅니다.
 
-`_internal`, `models`, `licenses`, `docs`와 함께 있는 파일들을 유지하세요. EXE만 옮기면 실행되지 않습니다. GitHub에서 전달하려면 이 ZIP을 Release 첨부 파일로 사용합니다. 개인 용도로 사용한다는 이유만으로 공개 저장소의 Release가 비공개가 되는 것은 아닙니다. 이번 준비 작업은 Release를 게시하지 않습니다.
+`_internal`, `models`, `licenses`, `docs`와 함께 있는 파일들을 유지하세요. EXE만 옮기면 실행되지 않습니다. GitHub에서 전달하려면 이 ZIP을 Release 첨부 파일로 사용합니다. 개인 용도로 사용한다는 이유만으로 공개 저장소의 Release가 비공개가 되는 것은 아닙니다. v0.1.3부터 비공개 저장소의 Release에 ZIP과 체크섬을 첨부합니다.
 
 다운로드와 파일 이동이 끝나면 실행에 인터넷 연결은 필요 없습니다. 온라인 회의 프로그램의 네트워크 사용은 별개입니다. 앱은 외부 인식 서비스로 자동 대체하거나 실행 중 모델을 내려받지 않습니다.
 
